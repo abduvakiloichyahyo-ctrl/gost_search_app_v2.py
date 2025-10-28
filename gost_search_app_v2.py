@@ -1,127 +1,197 @@
+from flask import Flask, render_template_string, request, redirect, url_for
 import json
 import os
-from flask import Flask, request, render_template_string, redirect, url_for, flash
 
 app = Flask(__name__)
-app.secret_key = "supersecretkey"  # для уведомлений Flask
 
-# 📁 Путь к файлу с ГОСТами
 DATA_FILE = "gost_data.json"
 
-# 📦 Если файла нет — создаём с примером
-if not os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump({
-            "ГОСТ 959-2002": [
-                "Пункт 4.1 — Внешний осмотр проводится для выявления трещин, сколов и дефектов поверхности.",
-                "Пункт 4.2 — Поверхность изделия должна быть чистой, без следов коррозии.",
-                "Пункт 4.3 — Маркировка должна быть чёткой и разборчивой."
-            ]
-        }, f, ensure_ascii=False, indent=4)
-
+# Загружаем базу ГОСТов
 def load_data():
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
+# Сохраняем базу ГОСТов
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-# 🧠 HTML-шаблон
-HTML_PAGE = """
+@app.route("/", methods=["GET", "POST"])
+def index():
+    gost_data = load_data()
+    search_query = request.args.get("q", "").lower().strip()
+    results = {}
+
+    if search_query:
+        for gost, text in gost_data.items():
+            if search_query in gost.lower() or search_query in text.lower():
+                results[gost] = text
+
+    return render_template_string(TEMPLATE_INDEX, results=results, query=search_query)
+
+@app.route("/add", methods=["GET", "POST"])
+def add_gost():
+    gost_data = load_data()
+    if request.method == "POST":
+        gost_number = request.form["gost_number"].strip()
+        gost_text = request.form["gost_text"].strip()
+        if gost_number and gost_text:
+            gost_data[gost_number] = gost_text
+            save_data(gost_data)
+            return redirect(url_for("index"))
+    return render_template_string(TEMPLATE_ADD)
+
+@app.route("/list")
+def list_gosts():
+    gost_data = load_data()
+    return render_template_string(TEMPLATE_LIST, gost_data=gost_data)
+
+@app.route("/edit/<gost>", methods=["GET", "POST"])
+def edit_gost(gost):
+    gost_data = load_data()
+    if gost not in gost_data:
+        return "ГОСТ не найден", 404
+
+    if request.method == "POST":
+        new_text = request.form["gost_text"].strip()
+        gost_data[gost] = new_text
+        save_data(gost_data)
+        return redirect(url_for("list_gosts"))
+
+    return render_template_string(TEMPLATE_EDIT, gost=gost, text=gost_data[gost])
+
+@app.route("/delete/<gost>")
+def delete_gost(gost):
+    gost_data = load_data()
+    if gost in gost_data:
+        del gost_data[gost]
+        save_data(gost_data)
+    return redirect(url_for("list_gosts"))
+
+# ---------- HTML шаблоны ----------
+
+TEMPLATE_INDEX = """
 <!DOCTYPE html>
-<html lang="ru">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>Поиск ГОСТ по внешнему осмотру</title>
+    <meta charset="utf-8">
+    <title>Поиск ГОСТов</title>
     <style>
         body { font-family: Arial; margin: 40px; background: #f8f9fa; }
-        h1 { color: #007bff; }
-        form { margin-bottom: 20px; }
-        input[type=text], textarea {
-            padding: 10px; width: 400px; border-radius: 5px;
-            border: 1px solid #ccc; font-size: 16px;
-        }
-        button {
-            padding: 10px 15px; border: none; border-radius: 5px;
-            background: #007bff; color: white; font-size: 16px;
-            cursor: pointer;
-        }
-        button:hover { background: #0056b3; }
-        .result {
-            background: white; padding: 20px; border-radius: 10px;
-            box-shadow: 0 0 5px rgba(0,0,0,0.1); width: 600px;
-        }
-        li { margin: 10px 0; }
-        .message { color: green; margin-bottom: 15px; }
+        h1 { color: #333; }
+        input[type=text] { width: 300px; padding: 5px; }
+        button { padding: 5px 10px; cursor: pointer; }
+        .result { background: white; padding: 10px; margin-top: 10px; border-radius: 5px; }
+        a { text-decoration: none; color: #007bff; }
+        a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
-    <h1>🔍 Поиск пунктов ГОСТ по внешнему осмотру</h1>
-    <form method="GET">
-        <input type="text" name="query" placeholder="Например: ГОСТ 959 или 8732-78" value="{{ query }}">
+    <h1>🔍 Поиск по ГОСТам</h1>
+    <form method="get">
+        <input type="text" name="q" value="{{ query }}" placeholder="Введите номер ГОСТа...">
         <button type="submit">Искать</button>
     </form>
+    <p><a href="{{ url_for('add_gost') }}">➕ Добавить ГОСТ</a> | 
+       <a href="{{ url_for('list_gosts') }}">📋 Список ГОСТов</a></p>
 
-    {% if result %}
-        <div class="result">
-            <h2>{{ gost_name }}</h2>
-            <ul>
-                {% for item in result %}
-                    <li>{{ item }}</li>
-                {% endfor %}
-            </ul>
-        </div>
+    {% if results %}
+        <h2>Результаты:</h2>
+        {% for gost, text in results.items() %}
+            <div class="result">
+                <b>{{ gost }}</b><br>{{ text }}
+            </div>
+        {% endfor %}
     {% elif query %}
-        <p>❌ ГОСТ "{{ query }}" не найден.</p>
+        <p>Ничего не найдено.</p>
     {% endif %}
-
-    <hr>
-    <h2>➕ Добавить новый ГОСТ</h2>
-    {% with messages = get_flashed_messages() %}
-        {% if messages %}
-            <div class="message">{{ messages[0] }}</div>
-        {% endif %}
-    {% endwith %}
-
-    <form method="POST" action="{{ url_for('add_gost') }}">
-        <input type="text" name="name" placeholder="Например: ГОСТ 1234-2020" required><br><br>
-        <textarea name="points" rows="5" placeholder="Каждый пункт с новой строки" required></textarea><br><br>
-        <button type="submit">Добавить ГОСТ</button>
-    </form>
 </body>
 </html>
 """
 
-@app.route("/", methods=["GET"])
-def home():
-    query = request.args.get("query", "").strip()
-    data = load_data()
-    result = None
-    gost_name = None
+TEMPLATE_ADD = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Добавить ГОСТ</title>
+    <style>
+        body { font-family: Arial; margin: 40px; background: #f8f9fa; }
+        textarea { width: 400px; height: 150px; }
+    </style>
+</head>
+<body>
+    <h1>➕ Добавить новый ГОСТ</h1>
+    <form method="post">
+        <p>Номер ГОСТа:<br><input type="text" name="gost_number" required></p>
+        <p>Пункты внешнего осмотра:<br><textarea name="gost_text" required></textarea></p>
+        <button type="submit">Сохранить</button>
+    </form>
+    <p><a href="{{ url_for('index') }}">⬅ Вернуться</a></p>
+</body>
+</html>
+"""
 
-    if query:
-        # 🔍 умный поиск (по частичному совпадению)
-        for name, items in data.items():
-            if query.lower() in name.lower():
-                gost_name = name
-                result = items
-                break
+TEMPLATE_LIST = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Список ГОСТов</title>
+    <style>
+        body { font-family: Arial; margin: 40px; background: #f8f9fa; }
+        table { border-collapse: collapse; width: 100%; background: white; }
+        td, th { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        th { background: #eee; }
+        a { color: #007bff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .actions { white-space: nowrap; }
+    </style>
+</head>
+<body>
+    <h1>📋 Все ГОСТы</h1>
+    <table>
+        <tr><th>Номер ГОСТа</th><th>Пункты</th><th>Действия</th></tr>
+        {% for gost, text in gost_data.items() %}
+        <tr>
+            <td><b>{{ gost }}</b></td>
+            <td>{{ text[:100] }}{% if text|length > 100 %}...{% endif %}</td>
+            <td class="actions">
+                <a href="{{ url_for('edit_gost', gost=gost) }}">✏️ Редактировать</a> |
+                <a href="{{ url_for('delete_gost', gost=gost) }}" onclick="return confirm('Удалить ГОСТ {{ gost }}?')">🗑 Удалить</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </table>
+    <p><a href="{{ url_for('index') }}">⬅ Вернуться</a></p>
+</body>
+</html>
+"""
 
-    return render_template_string(HTML_PAGE, result=result, query=query, gost_name=gost_name)
-
-@app.route("/add", methods=["POST"])
-def add_gost():
-    name = request.form.get("name", "").strip()
-    points = request.form.get("points", "").strip().split("\n")
-
-    data = load_data()
-    data[name] = [p.strip() for p in points if p.strip()]
-    save_data(data)
-
-    flash(f"ГОСТ {name} успешно добавлен!")
-    return redirect(url_for("home"))
+TEMPLATE_EDIT = """
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Редактировать ГОСТ</title>
+    <style>
+        body { font-family: Arial; margin: 40px; background: #f8f9fa; }
+        textarea { width: 400px; height: 150px; }
+    </style>
+</head>
+<body>
+    <h1>✏️ Редактирование {{ gost }}</h1>
+    <form method="post">
+        <p>Пункты внешнего осмотра:<br><textarea name="gost_text" required>{{ text }}</textarea></p>
+        <button type="submit">💾 Сохранить изменения</button>
+    </form>
+    <p><a href="{{ url_for('list_gosts') }}">⬅ Назад</a></p>
+</body>
+</html>
+"""
 
 if __name__ == "__main__":
-    print("🚀 Flask сайт запущен на http://127.0.0.1:5000")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    print("🚀 Flask запущен на http://127.0.0.1:5000")
+    app.run(debug=True)
